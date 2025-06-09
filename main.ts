@@ -16,7 +16,7 @@ function fuzzyMatch(query: string, text: string): boolean {
     const queryChars = query.toLowerCase().split('');
     const textLower = text.toLowerCase();
     let searchIndex = 0;
-    
+
     for (const char of queryChars) {
         const foundIndex = textLower.indexOf(char, searchIndex);
         if (foundIndex === -1) return false;
@@ -27,8 +27,8 @@ function fuzzyMatch(query: string, text: string): boolean {
 
 export default class SmartAutoLinkerPro extends Plugin {
     private index: Map<string, IndexEntry[]> = new Map();
-    private metadataCache: MetadataCache;
-    private vault: Vault;
+    private metadataCache!: MetadataCache;
+    private vault!: Vault;
     private isIndexing = false;
     private debounceTimeout?: number;
 
@@ -199,9 +199,9 @@ export default class SmartAutoLinkerPro extends Plugin {
         // Combine & deduplicate
         const allMatches = [...exactMatches, ...fuzzyMatches];
         const uniqueMatches = allMatches.filter(
-            (match, index, self) => index === self.findIndex(m => 
-                m.type === match.type && 
-                m.notePath === match.notePath && 
+            (match, index, self) => index === self.findIndex(m =>
+                m.type === match.type &&
+                m.notePath === match.notePath &&
                 m.target === match.target
             )
         );
@@ -230,12 +230,67 @@ class SmartAutoLinkerProSuggest extends EditorSuggest<IndexEntry> {
             };
         }
 
-        // Standard word/phrase detection
+        // --- Sentence-based phrase detection ---
+        // Find sentence boundaries (., !, ?, or line start/end)
+        const sentenceEndRegex = /[.!?]/g;
+        let sentenceStart = 0;
+        let sentenceEnd = line.length;
+        for (let i = cursor.ch - 1; i >= 0; i--) {
+            if (/[.!?]/.test(line[i])) {
+                sentenceStart = i + 1;
+                break;
+            }
+        }
+        for (let i = cursor.ch; i < line.length; i++) {
+            if (/[.!?]/.test(line[i])) {
+                sentenceEnd = i;
+                break;
+            }
+        }
+        // Trim whitespace
+        while (sentenceStart < sentenceEnd && /\s/.test(line[sentenceStart])) sentenceStart++;
+        while (sentenceEnd > sentenceStart && /\s/.test(line[sentenceEnd - 1])) sentenceEnd--;
+        const sentence = line.substring(sentenceStart, sentenceEnd);
+        const sentenceOffset = sentenceStart;
+
+        // Split sentence into words with indices
+        const wordsWithIndices: { word: string, start: number, end: number }[] = [];
+        let wordRegex = /\b\w[\w\p{L}\p{N}'-]*\b/gu;
+        let match;
+        while ((match = wordRegex.exec(sentence)) !== null) {
+            wordsWithIndices.push({ word: match[0], start: match.index, end: match.index + match[0].length });
+        }
+        // Find which word the cursor is in (relative to sentence)
+        let cursorInSentence = cursor.ch - sentenceOffset;
+        let cursorWordIdx = wordsWithIndices.findIndex(w => cursorInSentence >= w.start && cursorInSentence <= w.end);
+        if (cursorWordIdx === -1) cursorWordIdx = wordsWithIndices.findIndex(w => cursorInSentence === w.end);
+        if (cursorWordIdx === -1) return null;
+
+        // Try all possible phrases in the sentence (longest to shortest)
+        for (let span = wordsWithIndices.length; span >= 1; span--) {
+            for (let offset = 0; offset <= wordsWithIndices.length - span; offset++) {
+                const startIdx = offset;
+                const endIdx = startIdx + span - 1;
+                const phraseStart = wordsWithIndices[startIdx].start;
+                const phraseEnd = wordsWithIndices[endIdx].end;
+                // Only consider phrases that include the cursor word
+                if (cursorWordIdx < startIdx || cursorWordIdx > endIdx) continue;
+                const phrase = sentence.substring(phraseStart, phraseEnd);
+                if (this.plugin.getSuggestions(phrase).length > 0) {
+                    return {
+                        start: { line: cursor.line, ch: sentenceOffset + phraseStart },
+                        end: { line: cursor.line, ch: sentenceOffset + phraseEnd },
+                        query: phrase,
+                    };
+                }
+            }
+        }
+
+        // Fallback: single word (original logic)
         let start = cursor.ch;
         while (start > 0 && !/[\s\p{P}]/u.test(line.charAt(start - 1))) start--;
         let end = cursor.ch;
         while (end < line.length && !/[\s\p{P}]/u.test(line.charAt(end))) end++;
-
         const query = line.substring(start, end);
         return query ? { start: { line: cursor.line, ch: start }, end: { line: cursor.line, ch: end }, query } : null;
     }
@@ -246,13 +301,13 @@ class SmartAutoLinkerProSuggest extends EditorSuggest<IndexEntry> {
 
     renderSuggestion(item: IndexEntry, el: HTMLElement) {
         const container = el.createDiv({ cls: 'smart-autolinker-suggestion' });
-        
+
         // Add icon based on type
-        const iconMap: Record<IndexEntryType, string> = { 
-            title: 'file-text', 
-            heading: 'heading', 
-            block: 'link', 
-            tag: 'tag' 
+        const iconMap: Record<IndexEntryType, string> = {
+            title: 'file-text',
+            heading: 'heading',
+            block: 'link',
+            tag: 'tag'
         };
         const icon = container.createDiv({ cls: 'smart-autolinker-icon' });
         setIcon(icon, iconMap[item.type]);
@@ -271,6 +326,8 @@ class SmartAutoLinkerProSuggest extends EditorSuggest<IndexEntry> {
     selectSuggestion(item: IndexEntry) {
         if (!this.context) return;
         const { editor, start, end, query } = this.context;
+
+        console.log('Inserting link for:', JSON.stringify(item), ', at position:', JSON.stringify({ start, end }));
 
         let linkText = '';
         switch (item.type) {
