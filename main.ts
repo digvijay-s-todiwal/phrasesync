@@ -219,52 +219,14 @@ class SmartAutoLinkerProSuggest extends EditorSuggest<IndexEntry> {
         const line = editor.getLine(cursor.line);
         if (!line) return null;
 
-        // Auto-detect dates (e.g., "2025-06-07" → [[2025-06-07]])
-        const dateMatch = line.match(/\b\d{4}-\d{2}-\d{2}\b/);
-        if (dateMatch) {
-            const [date] = dateMatch;
-            return {
-                start: { line: cursor.line, ch: line.indexOf(date) },
-                end: { line: cursor.line, ch: line.indexOf(date) + date.length },
-                query: date,
-            };
-        }
+        // --- Date detection ---
+        const dateTrigger = this.getDateTrigger(line, cursor);
+        if (dateTrigger) return dateTrigger;
 
         // --- Sentence-based phrase detection ---
-        // Find sentence boundaries (., !, ?, or line start/end)
-        const sentenceEndRegex = /[.!?]/g;
-        let sentenceStart = 0;
-        let sentenceEnd = line.length;
-        for (let i = cursor.ch - 1; i >= 0; i--) {
-            if (/[.!?]/.test(line[i])) {
-                sentenceStart = i + 1;
-                break;
-            }
-        }
-        for (let i = cursor.ch; i < line.length; i++) {
-            if (/[.!?]/.test(line[i])) {
-                sentenceEnd = i;
-                break;
-            }
-        }
-        // Trim whitespace
-        while (sentenceStart < sentenceEnd && /\s/.test(line[sentenceStart])) sentenceStart++;
-        while (sentenceEnd > sentenceStart && /\s/.test(line[sentenceEnd - 1])) sentenceEnd--;
-        const sentence = line.substring(sentenceStart, sentenceEnd);
-        const sentenceOffset = sentenceStart;
-
-        // Split sentence into words with indices
-        const wordsWithIndices: { word: string, start: number, end: number }[] = [];
-        let wordRegex = /\b\w[\w\p{L}\p{N}'-]*\b/gu;
-        let match;
-        while ((match = wordRegex.exec(sentence)) !== null) {
-            wordsWithIndices.push({ word: match[0], start: match.index, end: match.index + match[0].length });
-        }
-        // Find which word the cursor is in (relative to sentence)
-        let cursorInSentence = cursor.ch - sentenceOffset;
-        let cursorWordIdx = wordsWithIndices.findIndex(w => cursorInSentence >= w.start && cursorInSentence <= w.end);
-        if (cursorWordIdx === -1) cursorWordIdx = wordsWithIndices.findIndex(w => cursorInSentence === w.end);
-        if (cursorWordIdx === -1) return null;
+        const sentenceInfo = this.getSentenceInfo(line, cursor.ch);
+        if (!sentenceInfo) return null;
+        const { sentence, sentenceOffset, wordsWithIndices, cursorWordIdx } = sentenceInfo;
 
         // Try all possible phrases in the sentence (longest to shortest)
         for (let span = wordsWithIndices.length; span >= 1; span--) {
@@ -286,7 +248,69 @@ class SmartAutoLinkerProSuggest extends EditorSuggest<IndexEntry> {
             }
         }
 
-        // Fallback: single word (original logic)
+        // Fallback: single word
+        return this.getSingleWordTrigger(line, cursor);
+    }
+
+    // --- Helper: Date detection ---
+    private getDateTrigger(line: string, cursor: EditorPosition): EditorSuggestTriggerInfo | null {
+        const dateMatch = line.match(/\b\d{4}-\d{2}-\d{2}\b/);
+        if (dateMatch) {
+            const [date] = dateMatch;
+            return {
+                start: { line: cursor.line, ch: line.indexOf(date) },
+                end: { line: cursor.line, ch: line.indexOf(date) + date.length },
+                query: date,
+            };
+        }
+        return null;
+    }
+
+    // --- Helper: Sentence and word info ---
+    private getSentenceInfo(line: string, cursorCh: number): {
+        sentence: string,
+        sentenceOffset: number,
+        wordsWithIndices: { word: string, start: number, end: number }[],
+        cursorWordIdx: number
+    } | null {
+        // Find sentence boundaries (., !, ?, or line start/end)
+        let sentenceStart = 0;
+        let sentenceEnd = line.length;
+        for (let i = cursorCh - 1; i >= 0; i--) {
+            if (/[.!?]/.test(line[i])) {
+                sentenceStart = i + 1;
+                break;
+            }
+        }
+        for (let i = cursorCh; i < line.length; i++) {
+            if (/[.!?]/.test(line[i])) {
+                sentenceEnd = i;
+                break;
+            }
+        }
+        // Trim whitespace
+        while (sentenceStart < sentenceEnd && /\s/.test(line[sentenceStart])) sentenceStart++;
+        while (sentenceEnd > sentenceStart && /\s/.test(line[sentenceEnd - 1])) sentenceEnd--;
+        const sentence = line.substring(sentenceStart, sentenceEnd);
+        const sentenceOffset = sentenceStart;
+
+        // Split sentence into words with indices
+        const wordsWithIndices: { word: string, start: number, end: number }[] = [];
+        let wordRegex = /\b\w[\w\p{L}\p{N}'-]*\b/gu;
+        let match;
+        while ((match = wordRegex.exec(sentence)) !== null) {
+            wordsWithIndices.push({ word: match[0], start: match.index, end: match.index + match[0].length });
+        }
+        // Find which word the cursor is in (relative to sentence)
+        let cursorInSentence = cursorCh - sentenceOffset;
+        let cursorWordIdx = wordsWithIndices.findIndex(w => cursorInSentence >= w.start && cursorInSentence <= w.end);
+        if (cursorWordIdx === -1) cursorWordIdx = wordsWithIndices.findIndex(w => cursorInSentence === w.end);
+        if (cursorWordIdx === -1) return null;
+        return { sentence, sentenceOffset, wordsWithIndices, cursorWordIdx };
+    }
+
+    // --- Helper: Single word fallback ---
+    private getSingleWordTrigger(line: string, cursor: EditorPosition): EditorSuggestTriggerInfo | null {
         let start = cursor.ch;
         while (start > 0 && !/[\s\p{P}]/u.test(line.charAt(start - 1))) start--;
         let end = cursor.ch;
@@ -326,8 +350,6 @@ class SmartAutoLinkerProSuggest extends EditorSuggest<IndexEntry> {
     selectSuggestion(item: IndexEntry) {
         if (!this.context) return;
         const { editor, start, end, query } = this.context;
-
-        console.log('Inserting link for:', JSON.stringify(item), ', at position:', JSON.stringify({ start, end }));
 
         let linkText = '';
         switch (item.type) {
