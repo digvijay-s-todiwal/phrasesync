@@ -1,18 +1,18 @@
-## [1.2.0] – YYYY-MM-DD
+## [1.3.0] – YYYY-MM-DD
 
-### 🚀 New Feature
+### 🚀 New Features
 
-- **Automatic self-reload on startup**  
-	- Eliminates the need to manually disable and re-enable the plugin each time Obsidian launches.  
-	- After the full index build completes, `safeReload()` is invoked **once** per session to ensure PhraseSync is fully active.  
-	- Uses an in-memory session flag (`window.phraseSyncInitialized`) to guard against repeated reload loops.
+- **Configurable reload trigger**  
+	- Added a ribbon-icon button to manually reload PhraseSync at any time.  
+	- Exposed a “Reload PhraseSync” command in the Command Palette, with a placeholder hotkey.
+	- Users can now assign their own shortcut: navigate to **Settings → Community plugins → PhraseSync**, click the **+** next to “Reload PhraseSync,” and define any key combination.
 
 ### 🔧 Technical Details
 
-- **One-time reload guard**  
-	- Reload logic is tucked into the `onload()` lifecycle *after* indexing finishes, rather than at load-start.  
-	- A transient session flag prevents any further reloads until the next Obsidian restart.
+- **Ribbon icon integration**  
+	- Uses Obsidian’s `addRibbonIcon('refresh-cw', …)` API.  
+	- Invoking the icon calls `safeReload()`, with status-bar feedback and a native `Notice`.
 
-- **Minimal performance impact**  
-	- The reload is deferred until after indexing, so it does not block initial suggestion availability.  
-	- Session-only flag and single reload call incur negligible CPU/memory overhead.
+- **Hotkey customization**  
+	- Registered the reload command (`id: 'reload-phrasesync'`) without a hard-coded key binding.  
+	- Leverages Obsidian’s settings UI to allow users to bind any desired hotkey, improving flexibility and avoiding conflicts.

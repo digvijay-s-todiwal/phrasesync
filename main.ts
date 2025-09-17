@@ -47,6 +47,7 @@ export default class PhraseSync extends Plugin {
     private debounceTimeout?: number;
     private startupAttempts = 0;
     private maxStartupAttempts = 2;
+    private statusBarEl!: HTMLElement; // Added for status bar functionality
 
     async onload() {
         this.startupAttempts++;
@@ -54,11 +55,23 @@ export default class PhraseSync extends Plugin {
         try {
             await this.initializePlugin();
 
+            // Added: Initialize UI elements
+            this.initStatusBar();
+            this.initRibbonIcon();
+
             if (this.index.size === 0 && this.startupAttempts < this.maxStartupAttempts) {
                 setTimeout(() => this.reloadSelf(), 200);
             } else {
                 this.showStartupNotice();
             }
+
+            // Added: Register reload command
+            this.addCommand({
+                id: 'reload-phrasesync',
+                name: 'Reload PhraseSync',
+                callback: () => this.reloadSelf()
+            });
+
         } catch (err) {
             console.error("PhraseSync startup failed:", err);
             if (this.startupAttempts < this.maxStartupAttempts) {
@@ -67,8 +80,32 @@ export default class PhraseSync extends Plugin {
         }
     }
 
+    // Added: Status bar initialization
+    private initStatusBar() {
+        this.statusBarEl = this.addStatusBarItem();
+        this.updateStatusBar('active');
+        this.statusBarEl.onClickEvent(() => this.reloadSelf());
+    }
+
+    // Added: Status bar update
+    private updateStatusBar(state: 'active' | 'reloading') {
+        if (!this.statusBarEl) return;
+        const icon = state === 'active' ? 'check' : 'refresh-cw';
+        this.statusBarEl.empty();
+        setIcon(this.statusBarEl.createSpan(), icon);
+        this.statusBarEl.setAttr('title', `PhraseSync: ${state}. Click to reload.`);
+    }
+
+    // Added: Ribbon icon initialization
+    private initRibbonIcon() {
+        this.addRibbonIcon('refresh-cw', 'Reload PhraseSync', () => {
+            this.reloadSelf();
+        });
+    }
+
     async reloadSelf() {
-        console.log("PhraseSync: Initiallizing the plugin successful");
+        console.log("PhraseSync: Initializing the plugin successful");
+        this.updateStatusBar('reloading'); // Added: Update status bar during reload
         await (this.app as any).plugins.disablePlugin(this.manifest.id);
         await (this.app as any).plugins.enablePlugin(this.manifest.id);
     }
